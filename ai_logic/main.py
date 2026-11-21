@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ai_service import extract_visit_information
 
@@ -14,23 +14,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 class VisitTranscriptRequest(BaseModel):
-    transcript: str = Field(min_length=1)
+    transcript: str = Field(min_length=3)
+
+    @field_validator("transcript")
+    @classmethod
+    def validate_transcript(cls, value):
+        if not value.strip():
+            raise ValueError("Transcript cannot be empty")
+        return value.strip()
 
 
 @app.get("/")
 def health_check():
-    return {"status": "ASHA Sathi AI service is running"}
+    return {
+        "status": "ASHA Sathi AI service is running",
+        "service": "AI & Health Logic",
+        "version": "1.0.0",
+    }
 
 
 @app.post("/extract-visit")
 def extract_visit(request: VisitTranscriptRequest):
     try:
         visit_record = extract_visit_information(request.transcript)
-        return visit_record
+
+        return {
+            "success": True,
+            "message": "Visit successfully processed",
+            "data": visit_record,
+        }
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Visit extraction failed: {str(e)}"
-        )
+        error_message = str(e).lower()
+
+        # Gemini API quota / rate limit
+        if "429" in error_message or "resource_exhausted" in error_message:
+            raise HTTPException(
+                status_code=429,
+                detail="AI request limit reached. Please try again later.",
+            )
+
+        # Gemini service temporarily unavailable
+        elif "503" in error_message or "unavailable" in error_message:
+            raise HTTPException(
+                status_code=503,
+                detail="AI service is temporarily unavailable. Please try again.",
+            )
+
+        # Unexpected error
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Something went wrong while processing the visit.",
+            )

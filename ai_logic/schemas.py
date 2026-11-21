@@ -3,10 +3,19 @@ from pydantic import BaseModel, Field
 
 
 class ASHAVisitRecord(BaseModel):
+
     beneficiary_name: Optional[str] = None
     age: Optional[int] = None
 
-    visit_type: Optional[str] = None
+    visit_type: Optional[
+        Literal[
+            "Antenatal visit",
+            "Postnatal visit",
+            "Newborn visit",
+            "Immunization visit",
+            "General home visit"
+        ]
+    ] = None
 
     symptoms: list[str] = Field(default_factory=list)
     duration_of_symptoms: Optional[str] = None

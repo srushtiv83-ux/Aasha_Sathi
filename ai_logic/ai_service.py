@@ -21,11 +21,8 @@ def detect_danger_signs(visit_data: dict) -> dict:
     danger_signs = []
 
     symptoms = visit_data.get("symptoms") or []
-
-    # Convert symptoms to lowercase for checking
     symptoms = [str(s).lower() for s in symptoms]
 
-    # Pregnancy danger-sign keywords
     pregnancy_danger_keywords = [
         "severe headache",
         "headache",
@@ -47,14 +44,11 @@ def detect_danger_signs(visit_data: dict) -> dict:
 
     # Detect danger signs from symptoms
     for symptom in symptoms:
-
         for keyword in pregnancy_danger_keywords:
 
             if keyword in symptom:
-
                 if symptom not in danger_signs:
                     danger_signs.append(symptom)
-
                 break
 
     # ==========================================
@@ -64,37 +58,28 @@ def detect_danger_signs(visit_data: dict) -> dict:
     bp = visit_data.get("blood_pressure")
 
     if bp:
-
         try:
-
-            # Example: 150/100
             systolic, diastolic = map(
                 int,
                 str(bp).replace(" ", "").split("/")
             )
 
-            # High blood pressure threshold
             if systolic >= 140 or diastolic >= 90:
-
                 danger_signs.append(
                     f"High blood pressure ({bp})"
                 )
 
         except (ValueError, AttributeError):
-
             print("Could not parse blood pressure:", bp)
 
     # ==========================================
-    # RISK CLASSIFICATION (BACKUP VALIDATION)
+    # PRESERVE GEMINI RISK CLASSIFICATION
     # ==========================================
 
-    # Preserve Gemini's contextual risk assessment
     gemini_risk_level = visit_data.get("risk_level", "UNKNOWN")
-    gemini_urgent_referral = visit_data.get("urgent_referral", False)
-
-    # Python does not independently force HIGH risk based on keywords.
-    # Gemini performs contextual assessment using the complete visit information.
-    # Python's role here is to preserve that assessment.
+    gemini_urgent_referral = visit_data.get(
+        "urgent_referral", False
+    )
 
     visit_data["risk_level"] = gemini_risk_level
     visit_data["urgent_referral"] = gemini_urgent_referral
@@ -111,34 +96,57 @@ def detect_danger_signs(visit_data: dict) -> dict:
 
         normalized_sign = str(sign).strip().lower()
 
-        # Normalize BP descriptions to avoid duplicates
-        if "blood pressure" in normalized_sign or "high blood pressure" in normalized_sign:
-
+        # Normalize BP descriptions
+        if (
+            "blood pressure" in normalized_sign
+            or "high blood pressure" in normalized_sign
+        ):
             bp = visit_data.get("blood_pressure")
 
             if bp:
                 normalized_sign = f"high blood pressure ({bp})"
 
-        # Add only unique danger signs
+        # Avoid duplicates
         if normalized_sign not in combined_danger_signs:
             combined_danger_signs.append(normalized_sign)
 
     visit_data["danger_signs"] = combined_danger_signs
 
     # ==========================================
-    # INDEPENDENT SAFETY ALERT DETECTION
+    # SAFETY CONSISTENCY CHECK
     # ==========================================
 
     safety_alerts = []
 
-    visit_type = str(visit_data.get("visit_type") or "").lower()
+    if combined_danger_signs:
+
+        # Danger signs + LOW risk contradiction
+        if visit_data["risk_level"] == "LOW":
+            safety_alerts.append(
+                "Safety review required: danger signs were detected, "
+                "but the visit was classified as LOW risk."
+            )
+
+        # Danger signs + no urgent referral contradiction
+        if visit_data["urgent_referral"] is False:
+            safety_alerts.append(
+                "Safety review required: danger signs were detected, "
+                "but urgent referral was marked as false."
+            )
+
+    # ==========================================
+    # POSTPARTUM BLEEDING SAFETY CHECK
+    # ==========================================
+
+    visit_type = str(
+        visit_data.get("visit_type") or ""
+    ).lower()
 
     symptoms = [
         str(s).lower()
         for s in (visit_data.get("symptoms") or [])
     ]
 
-    # Postpartum bleeding alert
     if "postpartum" in visit_type or "postnatal" in visit_type:
 
         if any("bleeding" in symptom for symptom in symptoms):
@@ -148,12 +156,10 @@ def detect_danger_signs(visit_data: dict) -> dict:
             )
 
             if not visit_data.get("duration_of_symptoms"):
-
                 safety_alerts.append(
                     "Bleeding duration was not established."
                 )
 
-            # Always flag undocumented bleeding amount/severity
             safety_alerts.append(
                 "Bleeding amount/severity is not documented."
             )
@@ -186,20 +192,22 @@ ASHA VISIT TRANSCRIPT:
         ),
     )
 
-    # Validate Gemini's response using our Pydantic schema
-    visit_record = ASHAVisitRecord.model_validate_json(response.text)
+    # Validate Gemini response
+    visit_record = ASHAVisitRecord.model_validate_json(
+        response.text
+    )
 
-    # Convert Pydantic model to dictionary
+    # Convert model to dictionary
     visit_data = visit_record.model_dump()
 
-    # Run independent Python danger-sign detection
+    # Run Python safety checks
     visit_data = detect_danger_signs(visit_data)
 
     return visit_data
 
 
 # ==========================================
-# ANITHA DANGER DETECTION TEST
+# TEST 1: DANGER DETECTION
 # ==========================================
 
 def test_danger_detection():
@@ -220,7 +228,12 @@ def test_danger_detection():
         "advice_given": [],
         "follow_up_date": None,
         "missing_information": [],
-        "uncertain_information": []
+        "uncertain_information": [],
+        "risk_level": "LOW",
+        "risk_reasoning": "No significant concern identified.",
+        "recommended_action": "Routine follow-up.",
+        "urgent_referral": False,
+        "safety_alerts": []
     }
 
     result = detect_danger_signs(test_visit)
@@ -231,5 +244,46 @@ def test_danger_detection():
     print("Safety alerts:", result["safety_alerts"])
     print("Urgent referral:", result["urgent_referral"])
     print("========================================\n")
+
+    return result
+
+
+# ==========================================
+# TEST 2: SAFETY CONSISTENCY
+# ==========================================
+
+def test_safety_consistency():
+
+    test_visit = {
+        "beneficiary_name": "Anitha",
+        "age": 24,
+        "visit_type": "Antenatal visit",
+        "symptoms": [
+            "severe headache",
+            "blurred vision"
+        ],
+        "duration_of_symptoms": "since yesterday",
+        "temperature": None,
+        "blood_pressure": "150/100",
+        "danger_signs": [],
+        "advice_given": [],
+        "follow_up_date": None,
+        "missing_information": [],
+        "uncertain_information": [],
+        "risk_level": "LOW",
+        "risk_reasoning": "Routine visit",
+        "recommended_action": "Routine follow-up",
+        "urgent_referral": False,
+        "safety_alerts": []
+    }
+
+    result = detect_danger_signs(test_visit)
+
+    print("\n========== SAFETY CONSISTENCY TEST ==========")
+    print("Risk level:", result["risk_level"])
+    print("Danger signs:", result["danger_signs"])
+    print("Urgent referral:", result["urgent_referral"])
+    print("Safety alerts:", result["safety_alerts"])
+    print("==========================================\n")
 
     return result
