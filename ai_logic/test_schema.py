@@ -2,6 +2,7 @@ from schemas import ASHAVisitRecord
 
 
 record = ASHAVisitRecord(
+    visit_summary="A visit was documented.",
     beneficiary_name=None,
     age=None,
     visit_type=None,

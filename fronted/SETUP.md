@@ -3,14 +3,13 @@
 How the pieces fit:
 
 ```
-Browser (React)  ──►  Supabase Auth + Postgres      (login, workers, visits, follow-ups)
-      │
-      └──────────►  Supabase Edge Functions  ──►  Gnani API   (speech-to-text, text-to-speech)
-                    (hold the Gnani key)
+Browser (React) ──► Supabase Auth + Postgres (login, workers, visits, follow-ups)
+      ├───────────► Supabase Edge Functions ──► Gnani (speech-to-text, text-to-speech)
+      └───────────► Local FastAPI service ─────► Google Gemini (summary and extraction)
 ```
 
-The browser only ever holds the Supabase **URL** and **anon key**. The Gnani key lives in
-Supabase secrets and is used only inside Edge Functions.
+The browser holds only the Supabase **URL** and **anon key**. The Gnani key is a Supabase
+secret; the Gemini key stays in `ai_logic/.env` and is used only by the local AI service.
 
 ## 1. Create the Supabase project
 
@@ -29,13 +28,13 @@ npx supabase link --project-ref YOUR-PROJECT-REF
 npx supabase db push
 ```
 
-`db push` runs `supabase/migrations/0001_init.sql`. If you prefer, paste that file into
+`db push` runs both migrations, including `0002_ai_visit_summary.sql`. If you prefer, paste
+the migration files into
 **SQL Editor → New query** and press Run instead.
 
 What it creates: `profiles`, `patients`, `visits`, `follow_ups`, `alerts`, with Row Level
-Security so every worker sees only their own rows, plus two functions the app calls:
-`create_profile` (registration, generates the ASHA ID) and `confirm_visit` (saves a visit and
-its follow-ups together).
+Security so every worker sees only their own rows, plus `create_profile`,
+`confirm_visit`, and `confirm_visit_with_ai` for worker-scoped profile and visit creation.
 
 Check it worked: **Table Editor** should list the five tables, each marked "RLS enabled".
 
@@ -66,20 +65,36 @@ callable before login and the other two as login-only.
 ## 5. Point the frontend at your project
 
 ```bash
-cp .env.example .env     # then edit .env with your URL and anon key
+cp .env.example .env     # set Supabase URL/key and VITE_AI_API_URL
 npm install
 npm run dev              # http://localhost:5173
 ```
 
-## 6. Try it
+## 6. Install and start the AI service
+
+In a second terminal:
+
+```powershell
+cd ..\ai_logic
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+Set `GEMINI_API_KEY` in `ai_logic/.env` before starting the service. Keep that key out of
+the frontend `.env`. The API listens only on this computer by default.
+
+## 7. Try it
 
 1. **Register** with a phone number (or your test number), enter the OTP, and finish the form.
    An ASHA ID like `ASHA-2026-4819` is assigned.
 2. **Log out and log in** again using the phone number, then using the ASHA ID.
-3. On the dashboard tap **Listen** to hear the summary read by Gnani.
-4. Tap **Is it correct? Record a correction**, speak, tap again to stop, and review the text.
+3. On the dashboard record a visit. Gnani transcribes it; the AI service creates a summary
+   and prefills only stated details. Review the transcript, summary, and every suggestion.
+4. Confirm the danger-sign assessment yourself; the AI never marks that field as confirmed.
 5. Tap **Confirm & save**, then check **Table Editor → visits / follow_ups** for the new rows.
-6. On the saved screen tick a follow-up and refresh. It should stay ticked.
+6. On the saved screen check the summary and transcript, then tick a follow-up and refresh.
+   The follow-up should stay ticked.
 
 If something fails, **Edge Functions → (function) → Logs** in the Supabase dashboard shows the cause.
 
@@ -95,8 +110,6 @@ If something fails, **Edge Functions → (function) → Logs** in the Supabase d
 
 ## Still sample content
 
-- The visit on the dashboard (Meera Devi), the shift hours, and the danger-sign alert are still
-  fixed sample content. Confirming the visit saves that sample into your database.
-- Turning a spoken visit into structured fields and detecting danger signs is the job of the
-  `ai logic` part of the project, which is not connected yet.
+- The dashboard starts with an empty visit form. Shift hours and the separate Danger Alert screen
+  still contain fixed sample content; the sample alert does not contact anyone or save a visit.
 - The "Call PHC doctor" button needs a real phone number.

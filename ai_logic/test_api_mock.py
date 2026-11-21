@@ -11,12 +11,15 @@ def mock_extract_visit_information(transcript):
     print("\nMock AI received transcript:", transcript)
 
     return {
+        "visit_summary": "Routine antenatal visit. The beneficiary reported no complaints.",
         "beneficiary_name": "Anitha",
+        "beneficiary_location": None,
         "age": 24,
         "visit_type": "Antenatal visit",
         "symptoms": [],
         "duration_of_symptoms": None,
         "temperature": 36.8,
+        "temperature_unit": "C",
         "blood_pressure": "120/80",
         "pregnancy_month": 7,
         "pregnancy_status": "Pregnant",
@@ -49,7 +52,8 @@ response = client.post(
     json={
         "transcript": (
             "Anitha is 24 years old and is in her seventh month "
-            "of pregnancy. Her blood pressure is 120/80. "
+            "of pregnancy. Her temperature is 36.8 degrees Celsius "
+            "and her blood pressure is 120/80. "
             "She has no complaints."
         )
     },
@@ -67,7 +71,9 @@ print("================================")
 assert response.status_code == 200
 assert response.json()["success"] is True
 assert response.json()["data"]["beneficiary_name"] == "Anitha"
+assert response.json()["data"]["visit_summary"]
+assert response.json()["data"]["temperature_unit"] == "C"
 assert response.json()["data"]["risk_level"] == "LOW"
 assert response.json()["data"]["safety_alerts"] == []
 
-print("\nALL MOCK API ASSERTIONS PASSED! ✅")
+print("\nALL MOCK API ASSERTIONS PASSED!")

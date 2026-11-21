@@ -1,22 +1,35 @@
+import logging
+import os
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from ai_service import extract_visit_information
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="ASHA Sathi AI Service")
+
+frontend_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "FRONTEND_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=frontend_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 
 class VisitTranscriptRequest(BaseModel):
-    transcript: str = Field(min_length=3)
+    transcript: str = Field(min_length=3, max_length=10000)
 
     @field_validator("transcript")
     @classmethod
@@ -48,6 +61,7 @@ def extract_visit(request: VisitTranscriptRequest):
 
     except Exception as e:
         error_message = str(e).lower()
+        logger.exception("AI visit extraction failed")
 
         # Gemini API quota / rate limit
         if "429" in error_message or "resource_exhausted" in error_message:

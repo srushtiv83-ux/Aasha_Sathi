@@ -8,7 +8,11 @@ from prompts import VISIT_EXTRACTION_PROMPT
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("GEMINI_API_KEY is not configured for the AI service.")
+
+client = genai.Client(api_key=api_key)
 
 
 # ==========================================
@@ -222,7 +226,7 @@ ASHA VISIT TRANSCRIPT:
 """
 
     response = client.models.generate_content(
-       model="gemini-2.5-flash-lite",
+        model="gemini-3.5-flash-lite",
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -231,13 +235,14 @@ ASHA VISIT TRANSCRIPT:
         ),
     )
 
+    if not response.text:
+        raise ValueError("Gemini returned an empty visit extraction.")
+
     # ==========================================
     # VALIDATE GEMINI RESPONSE
     # ==========================================
 
-    visit_record = ASHAVisitRecord.model_validate_json(
-        response.text
-    )
+    visit_record = ASHAVisitRecord.model_validate_json(response.text)
 
     # ==========================================
     # CONVERT PYDANTIC MODEL TO DICTIONARY
@@ -261,6 +266,7 @@ ASHA VISIT TRANSCRIPT:
 def test_danger_detection():
 
     test_visit = ASHAVisitRecord(
+        visit_summary="Antenatal visit with reported danger signs.",
         beneficiary_name="Anitha",
         age=24,
         visit_type="Antenatal visit",
@@ -320,6 +326,7 @@ def test_danger_detection():
 def test_safety_consistency():
 
     test_visit = ASHAVisitRecord(
+        visit_summary="Antenatal visit with headache and blurred vision.",
         beneficiary_name="Anitha",
         age=24,
         visit_type="Antenatal visit",
@@ -378,12 +385,14 @@ def test_safety_consistency():
 def test_normal_visit():
 
     test_visit = ASHAVisitRecord(
+        visit_summary="Routine antenatal visit with no reported symptoms.",
         beneficiary_name="Lakshmi",
         age=23,
         visit_type="Antenatal visit",
         symptoms=[],
         duration_of_symptoms=None,
         temperature=36.8,
+        temperature_unit="C",
         blood_pressure="120/80",
 
         pregnancy_month=4,

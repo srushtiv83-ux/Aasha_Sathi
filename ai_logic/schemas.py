@@ -4,12 +4,19 @@ from pydantic import BaseModel, Field
 
 class ASHAVisitRecord(BaseModel):
 
+    visit_summary: str = Field(
+        min_length=3,
+        max_length=2000,
+        description="Concise factual summary using only information explicitly stated in the transcript.",
+    )
+
     # ==========================================
     # BENEFICIARY DETAILS
     # ==========================================
 
     beneficiary_name: Optional[str] = None
-    age: Optional[int] = None
+    age: Optional[int] = Field(default=None, ge=0, le=120)
+    beneficiary_location: Optional[str] = None
 
 
     # ==========================================
@@ -35,6 +42,7 @@ class ASHAVisitRecord(BaseModel):
     duration_of_symptoms: Optional[str] = None
 
     temperature: Optional[float] = None
+    temperature_unit: Optional[Literal["C", "F"]] = None
     blood_pressure: Optional[str] = None
 
 

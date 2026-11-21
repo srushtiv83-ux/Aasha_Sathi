@@ -46,6 +46,11 @@ CLASSIFICATION RULES:
 7. If the purpose is unclear or unrelated to the above,
    use "General home visit".
 
+VISIT SUMMARY:
+
+Create visit_summary as a concise, readable summary of the visit.
+Include only details explicitly stated in the transcript. Do not add a
+diagnosis, assumed finding, or treatment recommendation to the summary.
 
 ==================================================
 BENEFICIARY INFORMATION
@@ -55,6 +60,7 @@ Extract:
 
 - beneficiary_name
 - age
+- beneficiary_location
 
 RULES:
 
@@ -62,7 +68,9 @@ RULES:
 
 2. Do not guess age or beneficiary identity.
 
-3. If information is missing, leave the field null.
+3. Extract beneficiary_location only when the location is explicitly stated.
+
+4. If information is missing, leave the field null.
 
 
 ==================================================
@@ -88,6 +96,10 @@ RULES:
 
 5. If the measurement is unclear or contradictory,
    document the uncertainty.
+
+6. For temperature, return the numeric value and set temperature_unit
+   to "C" or "F" only when the unit is explicitly stated. Otherwise,
+   leave temperature and temperature_unit null.
 
 
 ==================================================
@@ -419,6 +431,7 @@ Use:
 Ensure:
 
 - All field names match the schema exactly.
+- Include a factual visit_summary.
 - Visit type matches one of the allowed values.
 - Risk level matches one of the allowed values.
 - Lists contain only appropriate values.

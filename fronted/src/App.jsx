@@ -5,6 +5,7 @@ import Dashboard from './screens/Dashboard.jsx';
 import VisitSaved from './screens/VisitSaved.jsx';
 import DangerAlert from './screens/DangerAlert.jsx';
 import { SessionProvider, useSession } from './lib/session.jsx';
+import { useTranslation } from './lib/i18n.js';
 
 // Tiny hash router (no extra dependency).
 // Routes: #/splash  #/login  #/register  #/dashboard  #/visit-saved/<visit id>  #/danger
@@ -27,6 +28,7 @@ function Notice({ title, children }) {
 
 function Router() {
   const { configured, session, profile, loading, profileLoading } = useSession();
+  const t = useTranslation();
   const [route, setRoute] = useState(getRoute());
 
   useEffect(() => {
@@ -48,13 +50,12 @@ function Router() {
 
   if (!configured) {
     return (
-      <Notice title="Backend not connected">
-        Add <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> to a{' '}
-        <code>.env</code> file (see <code>.env.example</code>), then restart <code>npm run dev</code>.
+      <Notice title={t('backendNotConnected')}>
+        {t('backendNote')}
       </Notice>
     );
   }
-  if (loading || (profileLoading && !isPublic)) return <Notice title="ASHA Sathi">Loading…</Notice>;
+  if (loading || (profileLoading && !isPublic)) return <Notice title="ASHA Sathi">{t('loading')}</Notice>;
   // Public screens stay mounted while a profile loads, so a half-filled form is never lost.
   if (signedIn && isPublic) return null;
   if (!signedIn && !isPublic) return null;

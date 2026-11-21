@@ -8,7 +8,8 @@ const TARGET_RATE = 16_000;
 export const canRecord = () =>
   typeof navigator !== 'undefined' &&
   Boolean(navigator.mediaDevices?.getUserMedia) &&
-  typeof MediaRecorder !== 'undefined';
+  typeof window !== 'undefined' &&
+  Boolean(window.AudioContext || window.webkitAudioContext);
 
 // ---------------------------------------------------------------- recording
 
@@ -38,24 +39,30 @@ function encodeWav(samples, sampleRate) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
-// Browsers record webm/mp4, which Gnani does not accept, so convert to WAV here.
-async function toWav(blob) {
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  const ctx = new AudioCtx();
-  try {
-    const source = await ctx.decodeAudioData(await blob.arrayBuffer());
+function resample(samples, sourceRate) {
+  if (sourceRate === TARGET_RATE) return samples;
 
-    const frames = Math.max(1, Math.ceil(source.duration * TARGET_RATE));
-    const offline = new OfflineAudioContext(1, frames, TARGET_RATE);
-    const node = offline.createBufferSource();
-    node.buffer = source;
-    node.connect(offline.destination);
-    node.start();
-    const rendered = await offline.startRendering();
-    return { wav: encodeWav(rendered.getChannelData(0), TARGET_RATE), seconds: source.duration };
-  } finally {
-    ctx.close?.();
+  const ratio = sourceRate / TARGET_RATE;
+  const output = new Float32Array(Math.floor(samples.length / ratio));
+  if (sourceRate > TARGET_RATE) {
+    for (let i = 0; i < output.length; i += 1) {
+      const start = Math.floor(i * ratio);
+      const end = Math.min(samples.length, Math.floor((i + 1) * ratio));
+      let total = 0;
+      for (let j = start; j < end; j += 1) total += samples[j];
+      output[i] = total / Math.max(1, end - start);
+    }
+    return output;
   }
+
+  for (let i = 0; i < output.length; i += 1) {
+    const position = i * ratio;
+    const lower = Math.floor(position);
+    const upper = Math.min(lower + 1, samples.length - 1);
+    const fraction = position - lower;
+    output[i] = samples[lower] * (1 - fraction) + samples[upper] * fraction;
+  }
+  return output;
 }
 
 // Starts recording. Returns { stop, result } where `result` resolves to
@@ -77,32 +84,83 @@ export async function startRecording() {
     );
   }
 
-  const recorder = new MediaRecorder(stream);
-  const chunks = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data.size > 0) chunks.push(event.data);
-  };
-
-  const result = new Promise((resolve, reject) => {
-    recorder.onerror = () => reject(new Error('Recording failed. Please try again.'));
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
-      try {
-        if (chunks.length === 0) throw new Error('No audio was captured.');
-        resolve(await toWav(new Blob(chunks, { type: recorder.mimeType })));
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error('Could not process the recording.'));
-      }
-    };
-  });
-
-  const timer = window.setTimeout(() => stop(), MAX_RECORD_MS);
-  function stop() {
-    window.clearTimeout(timer);
-    if (recorder.state !== 'inactive') recorder.stop();
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let context;
+  let source;
+  let processor;
+  try {
+    context = new AudioCtx();
+    await context.resume();
+    source = context.createMediaStreamSource(stream);
+    processor = context.createScriptProcessor(4096, 1, 1);
+    source.connect(processor);
+    processor.connect(context.destination);
+  } catch (err) {
+    stream.getTracks().forEach((track) => track.stop());
+    await context?.close();
+    throw new Error(`Could not initialize microphone recording: ${err.message}`);
   }
 
-  recorder.start();
+  const blocks = [];
+  let sampleCount = 0;
+  const sourceRate = context.sampleRate;
+  let stopped = false;
+  processor.onaudioprocess = (event) => {
+    if (stopped) return;
+    const block = new Float32Array(event.inputBuffer.getChannelData(0));
+    blocks.push(block);
+    sampleCount += block.length;
+    for (let channel = 0; channel < event.outputBuffer.numberOfChannels; channel += 1) {
+      event.outputBuffer.getChannelData(channel).fill(0);
+    }
+  };
+
+  let timer;
+  function stop() {
+    if (stopped) return;
+    stopped = true;
+    window.clearTimeout(timer);
+    void (async () => {
+      try {
+        processor.onaudioprocess = null;
+        let disconnectError;
+        try { source.disconnect(); } catch (err) { disconnectError = err; }
+        try {
+          processor.disconnect();
+        } catch (err) {
+          if (!disconnectError) disconnectError = err;
+        }
+        stream.getTracks().forEach((track) => track.stop());
+        try {
+          await context.close();
+        } catch (err) {
+          if (!disconnectError) disconnectError = err;
+        }
+        if (disconnectError) {
+          console.warn('Microphone audio cleanup failed:', disconnectError.message);
+        }
+        if (sampleCount === 0) throw new Error('No audio was captured.');
+        const samples = new Float32Array(sampleCount);
+        let offset = 0;
+        for (const block of blocks) {
+          samples.set(block, offset);
+          offset += block.length;
+        }
+        const mono = resample(samples, sourceRate);
+        resolveResult({ wav: encodeWav(mono, TARGET_RATE), seconds: sampleCount / sourceRate });
+      } catch (err) {
+        rejectResult(err instanceof Error ? err : new Error('Could not process the recording.'));
+      }
+    })();
+  }
+
+  let resolveResult;
+  let rejectResult;
+  const result = new Promise((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  timer = window.setTimeout(stop, MAX_RECORD_MS);
   return { stop, result };
 }
 
