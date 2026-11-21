@@ -1,41 +1,48 @@
 import Icon from '../components/Icon.jsx';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { navigate } from '../App.jsx';
+import { speak } from '../lib/voice.js';
 
 export default function DangerAlert() {
   const [speaking, setSpeaking] = useState(false);
   const [referralLogged, setReferralLogged] = useState(false);
   const [message, setMessage] = useState('');
 
-  useEffect(() => () => window.speechSynthesis?.cancel(), []);
+  const abortRef = useRef(null);
+  const mountedRef = useRef(true);
 
-  const speakAlert = () => {
-    if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
-      setMessage('Spoken playback is not supported in this browser.');
-      return;
-    }
-
-    if (speaking) {
-      window.speechSynthesis.cancel();
-      setSpeaking(false);
-      setMessage('Playback stopped.');
-      return;
-    }
-
-    const utterance = new SpeechSynthesisUtterance(
-      'Sample urgent alert. Danger sign detected. Refer Ramesh to Rampur PHC immediately. Call the PHC doctor or emergency services using the official local number.'
-    );
-    utterance.lang = 'en-IN';
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = (event) => {
-      setSpeaking(false);
-      if (event.error !== 'canceled' && event.error !== 'interrupted') {
-        setMessage('Spoken playback is unavailable here. The alert text remains visible above.');
-      }
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
     };
+  }, []);
+
+  const speakAlert = async () => {
+    if (speaking) {
+      abortRef.current?.abort();
+      return;
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
     setMessage('');
     setSpeaking(true);
-    window.speechSynthesis.speak(utterance);
+    try {
+      await speak(
+        'Sample urgent alert. Danger sign detected. Refer Ramesh to Rampur PHC immediately. Call the PHC doctor or emergency services using the official local number.',
+        { language: 'en-IN', signal: controller.signal },
+      );
+    } catch {
+      if (mountedRef.current) setMessage('Spoken playback is unavailable here. The alert text remains visible above.');
+    } finally {
+      if (mountedRef.current) {
+        setSpeaking(false);
+        if (controller.signal.aborted) setMessage('Playback stopped.');
+      }
+      abortRef.current = null;
+    }
   };
 
   return (

@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import Icon from '../components/Icon.jsx';
 import { LOGO_MAIN } from '../components/Logo.jsx';
-import { navigate } from '../App.jsx';
+import { callFunction, supabase } from '../lib/supabase.js';
+import { useSession } from '../lib/session.jsx';
 
-const DEMO_OTP = '123456';
 const INPUT =
   'w-full min-h-12 px-gutter-md rounded-sm bg-light-surface-container-lowest border border-light-outline text-light-on-surface font-body text-body-lg focus:border-light-primary focus:ring-1 focus:ring-light-primary';
 const INPUT_FLEX =
@@ -55,7 +55,12 @@ export default function Auth({ initialMode = 'login' }) {
   const [languages, setLanguages] = useState(['English']);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const { session, reloadProfile } = useSession();
   const isLogin = mode === 'login';
+  // Phone already verified but the profile was never created (e.g. the connection dropped).
+  const [verified, setVerified] = useState(false);
+  const phoneVerified = verified || (!isLogin && Boolean(session));
 
   const changeMode = (nextMode) => {
     setMode(nextMode);
@@ -73,9 +78,14 @@ export default function Auth({ initialMode = 'login' }) {
     setStatus('');
   };
 
-  const sendOtp = () => {
+  const validIdentifier = () => {
     const validLoginId = /^ASHA-[A-Z0-9-]+$/i.test(identifier.trim());
-    if (isLogin ? !(validLoginId || isValidPhone(identifier)) : !isValidPhone(identifier)) {
+    return isLogin ? validLoginId || isValidPhone(identifier) : isValidPhone(identifier);
+  };
+
+  const sendOtp = async () => {
+    if (busy) return;
+    if (!validIdentifier()) {
       setError(isLogin
         ? 'Enter a valid 10-digit Indian phone number or ASHA ID before requesting an OTP.'
         : 'Enter a valid 10-digit Indian phone number before requesting an OTP.');
@@ -83,35 +93,79 @@ export default function Auth({ initialMode = 'login' }) {
       return;
     }
 
-    setOtp('');
-    setOtpSent(true);
+    setBusy(true);
     setError('');
-    setStatus(`Demo only: use OTP ${DEMO_OTP}. No SMS is sent.`);
+    setStatus('');
+    try {
+      const res = await callFunction('auth-otp', {
+        json: { action: 'send', mode, identifier: identifier.trim() },
+      });
+      const payload = await res.json();
+      setOtp('');
+      setOtpSent(true);
+      setStatus(`OTP sent to ${payload.maskedPhone}. It is valid for a few minutes.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const submit = (event) => {
+  const createProfile = async () => {
+    const { error: rpcError } = await supabase.rpc('create_profile', {
+      p_full_name: fullName,
+      p_date_of_birth: dateOfBirth,
+      p_place: place,
+      p_languages: languages,
+    });
+    // "Profile already exists" means an earlier attempt succeeded; carry on.
+    if (rpcError && rpcError.code !== '23505') throw new Error('Could not create your account. Please try again.');
+    await reloadProfile(); // the router then moves to the dashboard
+  };
+
+  const submit = async (event) => {
     event.preventDefault();
-    if (isLogin && !(/^ASHA-[A-Z0-9-]+$/i.test(identifier.trim()) || isValidPhone(identifier))) {
-      setError('Enter a valid 10-digit Indian phone number or ASHA ID.');
-      return;
-    }
-    if (!isLogin && !isValidPhone(identifier)) {
-      setError('Enter a valid 10-digit Indian phone number.');
-      return;
-    }
-    if (!otpSent) {
-      setError('Request a demo OTP before continuing.');
-      return;
-    }
-    if (otp !== DEMO_OTP) {
-      setError('The demo OTP must be 123456.');
-      return;
-    }
+    if (busy) return;
     if (!isLogin && languages.length === 0) {
       setError('Select at least one preferred language.');
       return;
     }
-    navigate('dashboard');
+
+    setBusy(true);
+    setError('');
+    try {
+      if (!phoneVerified) {
+        if (!validIdentifier()) {
+          setError(isLogin
+            ? 'Enter a valid 10-digit Indian phone number or ASHA ID.'
+            : 'Enter a valid 10-digit Indian phone number.');
+          return;
+        }
+        if (!otpSent) {
+          setError('Request an OTP before continuing.');
+          return;
+        }
+        if (!/^\d{6}$/.test(otp)) {
+          setError('Enter the 6-digit OTP.');
+          return;
+        }
+
+        const res = await callFunction('auth-otp', {
+          json: { action: 'verify', mode, identifier: identifier.trim(), otp },
+        });
+        const payload = await res.json();
+        const { error: sessionError } = await supabase.auth.setSession(payload.session);
+        if (sessionError) throw new Error('Could not start your session. Please try again.');
+        setVerified(true);
+      }
+
+      if (!isLogin) await createProfile();
+      // Login: the router moves to the dashboard once the profile loads.
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const toggleLanguage = (language) => {
@@ -158,7 +212,7 @@ export default function Auth({ initialMode = 'login' }) {
                   onChange={(event) => changeIdentifier(event.target.value)}
                   className={INPUT_FLEX}
                 />
-                <button type="button" onClick={sendOtp} className={OTP_BTN}><span>Send OTP</span></button>
+                <button type="button" onClick={sendOtp} disabled={busy} className={`${OTP_BTN} disabled:opacity-60`}><span>{otpSent ? 'Resend OTP' : 'Send OTP'}</span></button>
               </div>
             </div>
 
@@ -171,7 +225,7 @@ export default function Auth({ initialMode = 'login' }) {
                 autoComplete="one-time-code"
                 maxLength={6}
                 pattern="[0-9]{6}"
-                required
+                required={!phoneVerified}
                 value={otp}
                 onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="6-digit OTP"
@@ -179,9 +233,9 @@ export default function Auth({ initialMode = 'login' }) {
               />
             </div>
 
-            <button type="submit" className={PRIMARY}>
+            <button type="submit" disabled={busy} className={`${PRIMARY} disabled:opacity-60`}>
               <Icon name="login" className="text-[22px]" />
-              <span>Login to ASHA Sathi</span>
+              <span>{busy ? 'Please wait…' : 'Login to ASHA Sathi'}</span>
             </button>
 
             <div className="text-center">
@@ -213,7 +267,7 @@ export default function Auth({ initialMode = 'login' }) {
                   placeholder="98765 43210"
                   className={INPUT_FLEX}
                 />
-                <button type="button" onClick={sendOtp} className={OTP_BTN}><span>Send OTP</span></button>
+                <button type="button" onClick={sendOtp} disabled={busy} className={`${OTP_BTN} disabled:opacity-60`}><span>{otpSent ? 'Resend OTP' : 'Send OTP'}</span></button>
               </div>
             </div>
 
@@ -226,7 +280,7 @@ export default function Auth({ initialMode = 'login' }) {
                 autoComplete="one-time-code"
                 maxLength={6}
                 pattern="[0-9]{6}"
-                required
+                required={!phoneVerified}
                 value={otp}
                 onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="6-digit OTP"
@@ -245,11 +299,8 @@ export default function Auth({ initialMode = 'login' }) {
             </div>
 
             <div className="flex flex-col gap-gutter-xs">
-              <div className="flex items-center justify-between gap-gutter-sm">
-                <label htmlFor="reg-emp-no" className={LABEL}>Employee number</label>
-                <span className="font-label text-label-sm px-gutter-sm py-gutter-xs rounded-full bg-light-secondary-container text-light-on-secondary-container">Demo ID</span>
-              </div>
-              <input id="reg-emp-no" type="text" readOnly value="ASHA-2026-4819" className="w-full min-h-12 px-gutter-md rounded-sm bg-light-surface-container-low border border-light-outline-variant text-light-on-surface font-mono text-mono-md tabular-nums" />
+              <label htmlFor="reg-emp-no" className={LABEL}>Employee number</label>
+              <input id="reg-emp-no" type="text" readOnly value="Assigned when you register" className="w-full min-h-12 px-gutter-md rounded-sm bg-light-surface-container-low border border-light-outline-variant text-light-on-surface-variant font-body text-body-md" />
             </div>
 
             <fieldset className="flex flex-col gap-gutter-xs">
@@ -266,9 +317,9 @@ export default function Auth({ initialMode = 'login' }) {
               </div>
             </fieldset>
 
-            <button type="submit" className={PRIMARY}>
+            <button type="submit" disabled={busy} className={`${PRIMARY} disabled:opacity-60`}>
               <Icon name="person_add" className="text-[22px]" />
-              <span>Create demo worker account</span>
+              <span>{busy ? 'Please wait…' : 'Create account'}</span>
             </button>
 
             <div className="text-center">
