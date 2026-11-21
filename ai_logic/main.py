@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from typing import Literal
 
 from ai_service import extract_visit_information
 
@@ -30,6 +31,7 @@ app.add_middleware(
 
 class VisitTranscriptRequest(BaseModel):
     transcript: str = Field(min_length=3, max_length=10000)
+    speech_language: Literal["kanglish", "hinglish", "english"] = "english"
 
     @field_validator("transcript")
     @classmethod
@@ -51,7 +53,7 @@ def health_check():
 @app.post("/extract-visit")
 def extract_visit(request: VisitTranscriptRequest):
     try:
-        visit_record = extract_visit_information(request.transcript)
+        visit_record = extract_visit_information(request.transcript, request.speech_language)
 
         return {
             "success": True,

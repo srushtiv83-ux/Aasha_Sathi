@@ -6,9 +6,13 @@ client = TestClient(app)
 
 
 # Fake AI function — does not call Gemini
-def mock_extract_visit_information(transcript):
+mock_languages = []
+
+
+def mock_extract_visit_information(transcript, speech_language="english"):
 
     print("\nMock AI received transcript:", transcript)
+    mock_languages.append(speech_language)
 
     return {
         "visit_summary": "Routine antenatal visit. The beneficiary reported no complaints.",
@@ -55,7 +59,8 @@ response = client.post(
             "of pregnancy. Her temperature is 36.8 degrees Celsius "
             "and her blood pressure is 120/80. "
             "She has no complaints."
-        )
+        ),
+        "speech_language": "hinglish",
     },
 )
 
@@ -75,5 +80,6 @@ assert response.json()["data"]["visit_summary"]
 assert response.json()["data"]["temperature_unit"] == "C"
 assert response.json()["data"]["risk_level"] == "LOW"
 assert response.json()["data"]["safety_alerts"] == []
+assert mock_languages[-1] == "hinglish"
 
 print("\nALL MOCK API ASSERTIONS PASSED!")

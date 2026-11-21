@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import Icon from '../components/Icon.jsx';
+import EmergencyGuidance from '../components/EmergencyGuidance.jsx';
 import { navigate } from '../App.jsx';
 import { supabase } from '../lib/supabase.js';
 import { useTranslation } from '../lib/i18n.js';
@@ -146,12 +147,13 @@ export default function VisitSaved({ visitId }) {
               <article className="w-full bg-light-error-container rounded-md p-gutter-md">
                 <h2 className="font-title text-title-md text-light-on-error-container">{t('aiSuggestionsReview')}</h2>
                 {aiRecord.risk_level && aiRecord.risk_level !== 'UNKNOWN' && (
-                  <p className="font-label text-label-sm text-light-on-error-container mt-gutter-xs">{t('potentialRisk', { level: aiRecord.risk_level })}</p>
+                  <p className={`mt-gutter-xs inline-flex rounded-md px-3 py-2 font-headline text-headline-md font-bold ${aiRecord.risk_level === 'HIGH' || aiRecord.urgent_referral === true ? 'bg-red-100 text-red-900' : aiRecord.risk_level === 'MEDIUM' ? 'bg-yellow-100 text-yellow-950' : 'bg-green-100 text-green-950'}`}>{t('potentialRisk', { level: aiRecord.risk_level })}</p>
                 )}
                 {aiRecord.risk_reasoning && <p className="font-body text-body-md text-light-on-error-container mt-gutter-xs">{aiRecord.risk_reasoning}</p>}
                 {aiRecord.recommended_action && <p className="font-body text-body-md text-light-on-error-container mt-gutter-xs">{t('suggestedNextStep', { action: aiRecord.recommended_action })}</p>}
                 {aiRecord.follow_up_date && <p className="font-body text-body-md text-light-on-error-container mt-gutter-xs">{t('aiFollowUpDate', { date: aiRecord.follow_up_date })}</p>}
-                {aiRecord.urgent_referral && <p role="alert" className="font-label text-label-sm text-light-on-error-container mt-gutter-xs">{t('aiFlaggedUrgency')}</p>}
+                {(aiRecord.urgent_referral === true || aiRecord.risk_level === 'HIGH') && <div role="alert" className="mt-gutter-sm flex items-start gap-gutter-sm rounded-md border border-light-error/30 bg-white/70 p-gutter-sm text-light-on-error-container"><Icon name="warning" className="mt-0.5 text-[22px] text-light-error" /><p className="font-headline text-headline-md font-bold">{t('aiFlaggedUrgency')}</p></div>}
+                {(aiRecord.risk_level === 'HIGH' || aiRecord.urgent_referral === true) && <EmergencyGuidance />}
                 {aiDangerSigns.length > 0 && <p className="font-body text-body-md text-light-on-error-container mt-gutter-xs">{t('aiFlaggedDangerSigns', { signs: aiDangerSigns.join('; ') })}</p>}
                 {aiSafetyAlerts.map((alert) => (
                   <p key={alert} className="font-body text-body-md text-light-on-error-container mt-gutter-xs">{alert}</p>

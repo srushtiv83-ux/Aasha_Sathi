@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
+import { navigate } from '../App.jsx';
 import Icon from '../components/Icon.jsx';
 import { LOGO_SMALL } from '../components/Logo.jsx';
 import VoiceCaptureButton from '../components/VoiceCaptureButton';
+import EmergencyGuidance from '../components/EmergencyGuidance.jsx';
 import { extractVisit } from '../lib/ai.js';
 import { supabase } from '../lib/supabase.js';
 import { useSession } from '../lib/session.jsx';
 import { speak, startRecording, transcribe } from '../lib/voice.js';
 import { useTranslation } from '../lib/i18n.js';
+import { formatFollowUp, formatPatientAge, mentionsOverdueVaccination, resolveFollowUp } from '../lib/visitSummary.js';
+import { getIndiaGreetingKey, msUntilNextIndiaGreetingBoundary } from '../lib/timeGreeting.js';
 
 const ROW = 'grid grid-cols-[116px_1fr] gap-gutter-sm px-gutter-md py-gutter-sm';
 const DT = 'font-label text-label-sm text-light-on-surface-variant';
 
 const EMPTY_DRAFT = {
   visitSummary: '',
+  visitDate: '',
   visitType: '',
   aiExtraction: null,
   patientName: '',
@@ -30,13 +35,6 @@ const EMPTY_DRAFT = {
   followUpDetail: '',
   followUpDueAt: '',
 };
-
-function getGreetingKey() {
-  const hour = new Date().getHours();
-  if (hour < 12) return 'greeting_morning';
-  if (hour < 17) return 'greeting_afternoon';
-  return 'greeting_evening';
-}
 
 function optionalNumber(value) {
   if (value == null) return null;
@@ -71,7 +69,7 @@ function temperatureInFahrenheit(record) {
     : '';
 }
 
-function mergeExtractedVisit(current, record, transcript) {
+function mergeExtractedVisit(current, record, transcript, preferRecord = false) {
   const bloodPressure = parseBloodPressure(record.blood_pressure);
   const symptoms = textList(record.symptoms);
   const duration = typeof record.duration_of_symptoms === 'string' ? record.duration_of_symptoms.trim() : '';
@@ -84,20 +82,20 @@ function mergeExtractedVisit(current, record, transcript) {
     transcript,
     visitSummary: record.visit_summary?.trim() || current.visitSummary,
     visitType: record.visit_type || current.visitType,
-    patientName: current.patientName.trim() || record.beneficiary_name || '',
-    patientAge: current.patientAge || (
-      Number.isInteger(record.age) && record.age >= 0 && record.age <= 120 ? String(record.age) : ''
-    ),
-    location: current.location.trim() || record.beneficiary_location || '',
-    temperature: current.temperature || temperatureInFahrenheit(record),
-    bpSystolic: current.bpSystolic || bloodPressure.systolic,
-    bpDiastolic: current.bpDiastolic || bloodPressure.diastolic,
-    symptoms: current.symptoms.trim() || extractedSymptoms,
-    dangerStatus: dangerSignsList.length > 0 ? 'observed' : 'none',
-    dangerSigns: current.dangerSigns.trim() || dangerSignsList.join(', '),
-    careGiven: current.careGiven.trim() || advice,
-    followUpTitle: current.followUpTitle.trim() || record.recommended_action || '',
-    followUpDueAt: current.followUpDueAt || record.follow_up_date || '',
+    patientName: preferRecord ? record.beneficiary_name || current.patientName : current.patientName.trim() || record.beneficiary_name || '',
+    patientAge: preferRecord ? formatPatientAge(record.age, record.age_months) || current.patientAge : current.patientAge || formatPatientAge(record.age, record.age_months),
+    location: preferRecord ? record.beneficiary_location || current.location : current.location.trim() || record.beneficiary_location || '',
+    temperature: preferRecord ? temperatureInFahrenheit(record) || current.temperature : current.temperature || temperatureInFahrenheit(record),
+    bpSystolic: preferRecord ? bloodPressure.systolic || current.bpSystolic : current.bpSystolic || bloodPressure.systolic,
+    bpDiastolic: preferRecord ? bloodPressure.diastolic || current.bpDiastolic : current.bpDiastolic || bloodPressure.diastolic,
+    symptoms: preferRecord ? extractedSymptoms || current.symptoms : current.symptoms.trim() || extractedSymptoms,
+    dangerStatus: dangerSignsList.length > 0 ? 'observed' : current.dangerStatus,
+    dangerSigns: preferRecord ? dangerSignsList.join(', ') || current.dangerSigns : current.dangerSigns.trim() || dangerSignsList.join(', '),
+    careGiven: preferRecord ? advice || current.careGiven : current.careGiven.trim() || advice,
+    followUpTitle: preferRecord ? record.recommended_action || current.followUpTitle : current.followUpTitle.trim() || record.recommended_action || '',
+    followUpDueAt: preferRecord
+      ? record.follow_up_date ? resolveFollowUp(record.follow_up_date, current.visitDate) : current.followUpDueAt
+      : current.followUpDueAt || resolveFollowUp(record.follow_up_date, current.visitDate),
     aiExtraction: record,
   };
 }
@@ -131,7 +129,7 @@ function buildVisitPayload(draft) {
     p_correction_note: null,
     p_transcript: draft.transcript?.trim() || null,
     p_visit_summary: draft.visitSummary?.trim() || null,
-    p_ai_extraction: draft.aiExtraction || {},
+    p_ai_extraction: { ...(draft.aiExtraction || {}), danger_assessment: draft.dangerStatus || 'not_assessed' },
     p_follow_ups: followUps,
   };
 }
@@ -143,7 +141,7 @@ function describeDraft(draft, t) {
     : [];
   const parts = [
     draft.patientName && `${t('fieldPatient')} ${draft.patientName.trim()}`,
-    draft.patientAge && t('yearsOld', { age: draft.patientAge }),
+    draft.patientAge && (draft.patientAge.endsWith(' months') ? draft.patientAge : t('yearsOld', { age: draft.patientAge })),
     draft.location && `${t('fieldLocation')} ${draft.location.trim()}`,
     draft.temperature && t('tempFahrenheitText', { temp: draft.temperature }),
     draft.bpSystolic && draft.bpDiastolic && t('bpText', { sys: draft.bpSystolic, dia: draft.bpDiastolic }),
@@ -159,7 +157,7 @@ function describeDraft(draft, t) {
 
 const SPEECH_MODES = [
   { id: 'kanglish', label: 'Kanglish', sub: 'ಕನ್ನಡ + Eng', code: 'kn-IN' },
-  { id: 'hunglish', label: 'Hunglish', sub: 'हिंदी + Eng', code: 'hi-IN' },
+  { id: 'hunglish', label: 'Hinglish', sub: 'हिंदी + Eng', code: 'hi-IN' },
   { id: 'english', label: 'English', sub: 'Eng', code: 'en-IN' },
 ];
 
@@ -180,6 +178,24 @@ export default function Dashboard() {
   };
 
   const [speechMode, setSpeechMode] = useState(getInitialSpeechMode);
+  const [shiftId, setShiftId] = useState(() => {
+    try {
+      return localStorage.getItem('asha_shift') === 'early' ? 'early' : 'standard';
+    } catch {
+      return 'standard';
+    }
+  });
+  const [greetingKey, setGreetingKey] = useState(() => getIndiaGreetingKey());
+
+  useEffect(() => {
+    let timer;
+    const updateAtNextBoundary = () => {
+      setGreetingKey(getIndiaGreetingKey());
+      timer = window.setTimeout(updateAtNextBoundary, msUntilNextIndiaGreetingBoundary());
+    };
+    timer = window.setTimeout(updateAtNextBoundary, msUntilNextIndiaGreetingBoundary());
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const selectSpeechMode = (modeId) => {
     setSpeechMode(modeId);
@@ -190,6 +206,15 @@ export default function Dashboard() {
     }
   };
 
+  const selectShift = (value) => {
+    setShiftId(value);
+    try {
+      localStorage.setItem('asha_shift', value);
+    } catch {
+      // Keep the current choice for this session if storage is unavailable.
+    }
+  };
+
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -197,7 +222,9 @@ export default function Dashboard() {
   const [interactionMessage, setInteractionMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [showSummary, setShowSummary] = useState(false);
+  const [showVaccinationReminder, setShowVaccinationReminder] = useState(false);
   const [draft, setDraft] = useState(EMPTY_DRAFT);
+  const saveInProgressRef = useRef(false);
   const draftRef = useRef(draft);
   const recorderRef = useRef(null);
   const speechAbortRef = useRef(null);
@@ -224,28 +251,33 @@ export default function Dashboard() {
 
   const confirmAndSave = async (event) => {
     event.preventDefault();
-    if (saving || recording || transcribing) return;
+    if (saveInProgressRef.current || saving || recording || transcribing) return;
 
+    saveInProgressRef.current = true;
     setSaving(true);
     setInteractionMessage('');
 
-    const payload = buildVisitPayload(draft);
-    const { data, error } = await supabase.rpc('confirm_visit_with_ai', payload);
-    if (!mountedRef.current) return;
-    if (error || !data) {
-      setSaving(false);
-      setInteractionMessage(error?.message
-        ? t('errSaveFailed', { msg: error.message })
-        : t('errSaveNoId'));
-      return;
-    }
+    try {
+      const payload = buildVisitPayload(draft);
+      const { data, error } = await supabase.rpc('confirm_visit_with_ai', payload);
+      if (!mountedRef.current) return;
+      if (error || !data) {
+        setInteractionMessage(error?.message
+          ? t('errSaveFailed', { msg: error.message })
+          : t('errSaveNoId'));
+        return;
+      }
 
-    // All speech-to-text data saved! Return to the clean dashboard.
-    setSaving(false);
-    setDraft(EMPTY_DRAFT);
-    setShowSummary(false);
-    setInteractionMessage('');
-    setSuccessMessage(t('visitSavedSuccess'));
+      setDraft(EMPTY_DRAFT);
+      setShowSummary(false);
+      setInteractionMessage('');
+      navigate('visit-history');
+    } catch (err) {
+      if (mountedRef.current) setInteractionMessage(t('errSaveFailed', { msg: err?.message || 'Please try again.' }));
+    } finally {
+      saveInProgressRef.current = false;
+      if (mountedRef.current) setSaving(false);
+    }
   };
 
   const listenToSummary = async () => {
@@ -271,7 +303,7 @@ export default function Dashboard() {
     }
   };
 
-  const captureVisit = async () => {
+  const captureVisit = async (editingDraft = false) => {
     if (recording) {
       recorderRef.current?.stop();
       return;
@@ -280,6 +312,7 @@ export default function Dashboard() {
 
     setSuccessMessage('');
     setInteractionMessage('');
+    const visitDate = new Date().toISOString();
     let recorder;
     try {
       recorder = await startRecording();
@@ -293,6 +326,7 @@ export default function Dashboard() {
       return;
     }
     recorderRef.current = recorder;
+    setDraft((current) => ({ ...current, visitDate: current.visitDate || visitDate }));
     setRecording(true);
     setInteractionMessage(t('listening'));
 
@@ -318,14 +352,15 @@ export default function Dashboard() {
       let extraction;
       try {
         // AI service processes the transcript and predicts the structured visit record
-        extraction = await extractVisit(combinedTranscript);
+        extraction = await extractVisit(combinedTranscript, { language: speechMode === 'hunglish' ? 'hinglish' : speechMode });
       } catch (err) {
         if (!mountedRef.current) return;
         setInteractionMessage(t('errTranscriptFailed', { msg: err.message }));
         return;
       }
       if (!mountedRef.current) return;
-      setDraft((current) => mergeExtractedVisit(current, extraction, combinedTranscript));
+      setDraft((current) => mergeExtractedVisit(current, extraction, combinedTranscript, editingDraft));
+      if (mentionsOverdueVaccination(combinedTranscript)) setShowVaccinationReminder(true);
       setInteractionMessage(t('aiSummaryCreated'));
     } catch (err) {
       if (!mountedRef.current) return;
@@ -350,21 +385,38 @@ export default function Dashboard() {
         ? t('aiFlaggedReview', { signs: draft.dangerSigns })
         : t('notAssessed');
   const followUpSummary = draft.followUpTitle.trim()
-    ? `${draft.followUpTitle.trim()}${draft.followUpDueAt ? ` · ${new Date(draft.followUpDueAt).toLocaleString(voiceLanguage)}` : ''}`
+    ? `${draft.followUpTitle.trim()}${draft.aiExtraction?.follow_up_date ? ` · ${formatFollowUp(draft.followUpDueAt, draft.aiExtraction.follow_up_date, voiceLanguage)}` : draft.followUpDueAt ? ` · ${formatFollowUp(draft.followUpDueAt, '', voiceLanguage)}` : ''}`
     : t('notEntered');
 
   return (
     <div className="min-h-screen max-w-md mx-auto flex flex-col bg-light-surface">
+      {showVaccinationReminder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-gutter-md" onClick={() => setShowVaccinationReminder(false)}>
+          <section role="alertdialog" aria-modal="true" aria-labelledby="vaccination-reminder-title" aria-describedby="vaccination-reminder-description" className="w-full max-w-sm rounded-lg border border-light-outline-variant bg-light-surface-container-lowest p-gutter-lg shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start gap-gutter-sm">
+              <Icon name="warning" className="mt-0.5 text-[24px] text-amber-700" />
+              <div>
+                <h2 id="vaccination-reminder-title" className="font-headline text-headline-md font-bold text-light-on-surface">Vaccination may be overdue</h2>
+                <p id="vaccination-reminder-description" className="mt-gutter-xs font-body text-body-md text-light-on-surface-variant">The transcript mentions a vaccination due or missed last week. Please check the vaccination card and confirm the vaccine and due date before saving.</p>
+              </div>
+            </div>
+            <button type="button" autoFocus onClick={() => setShowVaccinationReminder(false)} className="mt-gutter-md min-h-12 w-full rounded-full bg-light-primary px-gutter-md font-label text-label-md text-light-on-primary hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-light-primary">Review visit details</button>
+          </section>
+        </div>
+      )}
       <header className="px-page-margin pt-gutter-lg pb-gutter-md flex items-center justify-between gap-gutter-sm border-b border-light-outline-variant">
         <div className="flex flex-col gap-gutter-xs">
           <div className="flex items-center gap-gutter-xs">
             <img src={LOGO_SMALL} alt="ASHA Sathi logo" className="w-6 h-6 rounded-full object-cover border border-light-outline-variant bg-light-surface-container-lowest shrink-0" />
             <span className="font-label text-label-sm text-light-primary">ASHA Sathi</span>
           </div>
-          <h1 className="font-display text-display-lg-mobile text-light-on-surface text-balance">{t(getGreetingKey())}{firstName ? `, ${firstName}` : ''}</h1>
+          <h1 className="font-display text-display-lg-mobile text-light-on-surface text-balance">{t(greetingKey)}{firstName ? `, ${firstName}` : ''}</h1>
           <div className="flex items-center gap-gutter-xs text-light-on-surface-variant">
             <Icon name="schedule" className="text-[16px]" />
-            <span className="font-body text-body-md font-bold text-light-on-surface tabular-nums">{t('shiftTime')}</span>
+            <select aria-label="Select shift time" value={shiftId} onChange={(event) => selectShift(event.target.value)} className="min-h-10 max-w-full cursor-pointer rounded-md border-0 bg-transparent p-0 pr-1 font-body text-body-md font-bold tabular-nums text-light-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-light-primary">
+              <option value="standard">{t('shiftTime')}</option>
+              <option value="early">{t('shiftTimeEarly')}</option>
+            </select>
           </div>
         </div>
       </header>
@@ -382,7 +434,7 @@ export default function Dashboard() {
             onActivate={captureVisit}
             disabled={saving}
           />
-          {/* Options like Kanglish, Hunglish, English */}
+          {/* Options like Kanglish, Hinglish, English */}
           <div className="flex flex-col items-center gap-1.5 mt-1">
             <span className="font-label text-label-xs text-light-on-surface-variant font-medium">
               {t('speechLanguage')}:
@@ -426,13 +478,15 @@ export default function Dashboard() {
         {/* Structured summary displayed exclusively from Speech to Text + AI logic */}
         {showSummary && (
           <section className="flex flex-col gap-gutter-sm pt-gutter-sm border-t border-light-outline-variant">
+            <p className="font-body text-body-sm text-light-on-surface-variant">Review and verify every AI-extracted detail, including danger signs, before confirming and saving.</p>
             <div className="flex items-center justify-between gap-gutter-sm">
-              <h2 className="font-headline text-headline-md text-light-on-surface">{t('visitSummaryDraft')}</h2>
+              <h2 className="font-headline text-headline-md text-light-on-surface">{t('visitSummaryTitle')}</h2>
               <button
                 type="button"
                 aria-pressed={speaking}
                 onClick={listenToSummary}
-                className="min-h-10 px-gutter-md rounded-full bg-light-secondary-container text-light-on-secondary-container font-label text-label-sm inline-flex items-center gap-gutter-xs disabled:opacity-60"
+                disabled={recording || transcribing || saving}
+                className="min-h-10 px-gutter-md rounded-full bg-light-primary text-light-on-primary font-label text-label-sm inline-flex items-center gap-gutter-xs transition-colors hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-light-primary disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Icon name={speaking ? 'stop' : 'volume_up'} className="text-[18px]" />
                 <span>{speaking ? t('stopSpeaking') : t('listenToDraft')}</span>
@@ -442,10 +496,6 @@ export default function Dashboard() {
             <article className="bg-light-surface-container-lowest border border-light-outline-variant rounded-md overflow-hidden">
               <header className="px-gutter-md py-gutter-sm bg-light-surface-container-low border-b border-light-outline-variant flex items-center justify-between gap-gutter-sm">
                 <span className="font-label text-label-sm text-light-on-surface-variant">{t('notSaved')}</span>
-                <span role="status" className="inline-flex items-center gap-gutter-xs px-gutter-sm py-gutter-xs rounded-full bg-uncertain-container text-on-uncertain-container font-label text-label-sm">
-                  <Icon name="edit_note" className="text-[16px]" />
-                  <span>{t('draft')}</span>
-                </span>
               </header>
 
               {draft.visitSummary.trim() && (
@@ -460,18 +510,22 @@ export default function Dashboard() {
                   <h3 className="font-title text-title-md text-light-on-surface">{t('aiSuggestions')}</h3>
                   <p className="mt-gutter-xs font-body text-body-sm text-light-on-surface-variant">{t('notADiagnosis')}</p>
                   {draft.aiExtraction.risk_level && (
-                    <p className="mt-gutter-sm font-label text-label-sm text-light-on-surface">{t('potentialRisk', { level: draft.aiExtraction.risk_level })}</p>
+                    <p className="mt-gutter-sm font-headline text-headline-md font-bold text-light-on-surface">{t('potentialRisk', { level: draft.aiExtraction.risk_level })}</p>
                   )}
                   {draft.aiExtraction.risk_reasoning && <p className="mt-gutter-xs font-body text-body-sm text-light-on-surface">{draft.aiExtraction.risk_reasoning}</p>}
                   {draft.aiExtraction.recommended_action && <p className="mt-gutter-xs font-body text-body-sm text-light-on-surface">{t('suggestedNextStep', { action: draft.aiExtraction.recommended_action })}</p>}
                   {draft.aiExtraction.follow_up_date && (
                     <p className="mt-gutter-xs font-body text-body-sm text-light-on-surface">
-                      {t('aiFollowUpDate', { date: draft.aiExtraction.follow_up_date })}
+                      {t('aiFollowUpDate', { date: formatFollowUp(draft.followUpDueAt, draft.aiExtraction.follow_up_date, voiceLanguage) })}
                     </p>
                   )}
-                  {draft.aiExtraction.urgent_referral === true && (
-                    <p role="alert" className="mt-gutter-sm font-label text-label-sm text-light-error">{t('aiFlaggedUrgency')}</p>
+                  {(draft.aiExtraction.urgent_referral === true || draft.aiExtraction.risk_level === 'HIGH') && (
+                    <div role="alert" className="mt-gutter-sm flex items-start gap-gutter-sm rounded-md border border-light-error/30 bg-light-error-container p-gutter-sm text-light-on-error-container">
+                      <Icon name="warning" className="mt-0.5 text-[22px] text-light-error" />
+                      <p className="font-headline text-headline-md font-bold">{t('aiFlaggedUrgency')}</p>
+                    </div>
                   )}
+                  {(draft.aiExtraction.risk_level === 'HIGH' || draft.aiExtraction.urgent_referral === true) && <EmergencyGuidance />}
                   {textList(draft.aiExtraction.safety_alerts).map((alert) => <p key={alert} className="mt-gutter-xs font-body text-body-sm text-light-error">{alert}</p>)}
                   {textList(draft.aiExtraction.danger_signs).length > 0 && (
                     <p className="mt-gutter-sm font-body text-body-sm text-light-error">
@@ -493,7 +547,8 @@ export default function Dashboard() {
 
               <dl className="divide-y divide-light-outline-variant">
                 {draft.visitType && <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldVisitType')}</dt><dd className="font-body text-body-md text-light-on-surface">{draft.visitType}</dd></div>}
-                <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldPatient')}</dt><dd className="font-title text-title-md text-light-on-surface">{draft.patientName.trim() || t('notEntered')}{draft.patientAge ? ` (${draft.patientAge} ${t('yearsUnit')})` : ''}</dd></div>
+                <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldPatient')}</dt><dd className="font-title text-title-md text-light-on-surface">{draft.patientName.trim() || t('notEntered')}{draft.patientAge ? ` (${draft.patientAge.endsWith(' months') ? draft.patientAge : `${draft.patientAge} ${t('yearsUnit')}`})` : ''}</dd></div>
+                {draft.aiExtraction?.immunization_name?.length > 0 && <div className={`${ROW} items-baseline`}><dt className={DT}>Vaccination</dt><dd className="font-body text-body-md text-light-on-surface">{draft.aiExtraction.immunization_name.join(', ')}{draft.aiExtraction.immunization_status ? ` — ${draft.aiExtraction.immunization_status}` : ''}</dd></div>}
                 <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldLocation')}</dt><dd className="font-body text-body-md text-light-on-surface">{draft.location.trim() || t('notEntered')}</dd></div>
                 <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldTemperature')}</dt><dd className="font-mono text-mono-md text-light-on-surface tabular-nums">{draft.temperature ? `${draft.temperature} °F` : t('notEntered')}</dd></div>
                 <div className={`${ROW} items-center`}><dt className={DT}>{t('fieldBloodPressure')}</dt><dd className="font-mono text-mono-md text-light-on-surface tabular-nums">{draft.bpSystolic && draft.bpDiastolic ? `${draft.bpSystolic}/${draft.bpDiastolic} mmHg` : t('notEntered')}</dd></div>
@@ -519,6 +574,14 @@ export default function Dashboard() {
                   {t('discardDraft')}
                 </button>
                 <button
+                  type="button"
+                  onClick={() => captureVisit(true)}
+                  disabled={saving || recording || transcribing}
+                  className="min-w-0 flex-1 min-h-14 px-gutter-md rounded-full bg-light-surface-container-low text-light-on-surface-variant font-label text-label-md transition-colors hover:bg-light-surface-container-lowest border border-light-outline-variant disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Edit
+                </button>
+                <button
                   type="submit"
                   disabled={saving || recording || transcribing}
                   className="min-w-0 flex-[2] min-h-14 px-gutter-lg rounded-full bg-light-primary text-light-on-primary font-label text-label-lg inline-flex items-center justify-center gap-gutter-sm disabled:opacity-60 transition-colors hover:bg-light-primary-container"
@@ -531,9 +594,14 @@ export default function Dashboard() {
           </section>
         )}
 
-        <button type="button" onClick={signOut} className="self-center min-h-11 px-gutter-md font-label text-label-lg text-light-primary underline underline-offset-4">
-          {t('logOut')}
-        </button>
+        <div className="self-center flex flex-col items-center gap-gutter-xs">
+          <button type="button" onClick={() => navigate('visit-history')} className="min-h-11 px-gutter-md rounded-full border border-light-primary font-label text-label-md text-light-primary inline-flex items-center gap-gutter-xs hover:bg-light-surface-container-low focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-light-primary">
+            <Icon name="history" className="text-[18px]" /> Visit History
+          </button>
+          <button type="button" onClick={signOut} className="min-h-11 px-gutter-md font-label text-label-lg text-light-primary underline underline-offset-4">
+            {t('logOut')}
+          </button>
+        </div>
       </main>
     </div>
   );

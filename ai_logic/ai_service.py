@@ -19,7 +19,25 @@ client = genai.Client(api_key=api_key)
 # DANGER SIGN DETECTION
 # ==========================================
 
-def detect_danger_signs(visit_data: dict) -> dict:
+SAFETY_ALERT_TRANSLATIONS = {
+    "kanglish": {
+        "Safety review required: danger signs were detected, but the visit was classified as LOW risk.": "Danger signs ಪತ್ತೆಯಾಗಿವೆ, ಆದರೆ visit LOW risk ಎಂದು ವರ್ಗೀಕರಿಸಲಾಗಿದೆ. Safety review ಅಗತ್ಯ.",
+        "Safety review required: danger signs were detected, but urgent referral was marked as false.": "Danger signs ಪತ್ತೆಯಾಗಿವೆ, ಆದರೆ urgent referral false ಎಂದು ಗುರುತಿಸಲಾಗಿದೆ. Safety review ಅಗತ್ಯ.",
+        "Postpartum bleeding reported. Clinical assessment is required.": "ಹೆರಿಗೆಯ ನಂತರ bleeding ವರದಿಯಾಗಿದೆ. Clinical assessment ಅಗತ್ಯ.",
+        "Bleeding duration was not established.": "Bleeding ಎಷ್ಟು ಸಮಯದಿಂದ ಇದೆ ಎಂಬುದು ತಿಳಿದಿಲ್ಲ.",
+        "Bleeding amount/severity is not documented.": "Bleeding ಪ್ರಮಾಣ ಅಥವಾ ತೀವ್ರತೆ ದಾಖಲಾಗಿಲ್ಲ.",
+    },
+    "hinglish": {
+        "Safety review required: danger signs were detected, but the visit was classified as LOW risk.": "Danger signs mile hain, lekin visit ko LOW risk classify kiya gaya hai. Safety review zaroori hai.",
+        "Safety review required: danger signs were detected, but urgent referral was marked as false.": "Danger signs mile hain, lekin urgent referral ko false mark kiya gaya hai. Safety review zaroori hai.",
+        "Postpartum bleeding reported. Clinical assessment is required.": "Delivery ke baad bleeding report hui hai. Clinical assessment zaroori hai.",
+        "Bleeding duration was not established.": "Bleeding kitne samay se hai, yeh confirm nahi hua.",
+        "Bleeding amount/severity is not documented.": "Bleeding ki matra ya severity document nahi hui.",
+    },
+}
+
+
+def detect_danger_signs(visit_data: dict, speech_language: str = "english") -> dict:
 
     danger_signs = []
 
@@ -82,9 +100,10 @@ def detect_danger_signs(visit_data: dict) -> dict:
 
             if systolic >= 140 or diastolic >= 90:
 
-                danger_signs.append(
-                    f"High blood pressure ({bp})"
-                )
+                danger_signs.append({
+                    "kanglish": f"ಅಧಿಕ ರಕ್ತದೊತ್ತಡ (High blood pressure: {bp})",
+                    "hinglish": f"High blood pressure (उच्च रक्तचाप: {bp})",
+                }.get(speech_language, f"High blood pressure ({bp})"))
 
         except (ValueError, TypeError):
 
@@ -114,10 +133,11 @@ def detect_danger_signs(visit_data: dict) -> dict:
 
     for sign in gemini_danger_signs + danger_signs:
 
-        normalized_sign = str(sign).strip().lower()
+        original_sign = str(sign).strip()
+        normalized_sign = original_sign.lower()
 
         # Normalize BP danger descriptions
-        if "blood pressure" in normalized_sign:
+        if "blood pressure" in normalized_sign and speech_language == "english":
 
             current_bp = visit_data.get("blood_pressure")
 
@@ -202,6 +222,7 @@ def detect_danger_signs(visit_data: dict) -> dict:
     for alert in gemini_safety_alerts + python_safety_alerts:
 
         normalized_alert = str(alert).strip()
+        normalized_alert = SAFETY_ALERT_TRANSLATIONS.get(speech_language, {}).get(normalized_alert, normalized_alert)
 
         if normalized_alert and normalized_alert not in combined_safety_alerts:
 
@@ -216,10 +237,19 @@ def detect_danger_signs(visit_data: dict) -> dict:
 # GEMINI VISIT INFORMATION EXTRACTION
 # ==========================================
 
-def extract_visit_information(transcript: str) -> dict:
+def extract_visit_information(transcript: str, speech_language: str = "english") -> dict:
+
+    language_instruction = {
+        "kanglish": "kanglish (Kannada-English mix)",
+        "hinglish": "hinglish (Hindi-English mix)",
+        "english": "English",
+    }.get(speech_language, "English")
 
     prompt = f"""
 {VISIT_EXTRACTION_PROMPT}
+
+SELECTED OUTPUT LANGUAGE: {language_instruction}
+Follow the prompt's language requirement for every narrative field.
 
 ASHA VISIT TRANSCRIPT:
 {transcript}
@@ -254,7 +284,7 @@ ASHA VISIT TRANSCRIPT:
     # RUN INDEPENDENT PYTHON SAFETY CHECKS
     # ==========================================
 
-    visit_data = detect_danger_signs(visit_data)
+    visit_data = detect_danger_signs(visit_data, speech_language)
 
     return visit_data
 

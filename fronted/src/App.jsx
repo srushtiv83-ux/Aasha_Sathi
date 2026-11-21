@@ -4,11 +4,12 @@ import Auth from './screens/Auth.jsx';
 import Dashboard from './screens/Dashboard.jsx';
 import VisitSaved from './screens/VisitSaved.jsx';
 import DangerAlert from './screens/DangerAlert.jsx';
+import VisitHistory from './screens/VisitHistory.jsx';
 import { SessionProvider, useSession } from './lib/session.jsx';
 import { useTranslation } from './lib/i18n.js';
 
 // Tiny hash router (no extra dependency).
-// Routes: #/splash  #/login  #/register  #/dashboard  #/visit-saved/<visit id>  #/danger
+// Routes: #/splash  #/login  #/register  #/dashboard  #/visit-history  #/visit-saved/<visit id>  #/danger
 const getRoute = () => (window.location.hash.replace(/^#\/?/, '') || 'splash');
 
 export function navigate(route) {
@@ -68,6 +69,8 @@ function Router() {
       return <Dashboard />;
     case 'visit-saved':
       return <VisitSaved visitId={param} />;
+    case 'visit-history':
+      return <VisitHistory />;
     case 'danger':
       return <DangerAlert />;
     default:

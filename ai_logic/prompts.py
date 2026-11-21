@@ -51,6 +51,12 @@ VISIT SUMMARY:
 Create visit_summary as a concise, readable summary of the visit.
 Include only details explicitly stated in the transcript. Do not add a
 diagnosis, assumed finding, or treatment recommendation to the summary.
+Keep it consistent with every populated structured field, including the
+beneficiary, age, visit type, vaccination, danger signs, and follow-up.
+Do not add details to make fields agree. If the transcript is unclear or
+contradictory, leave unsupported fields null/empty and explain the conflict
+in uncertain_information. A relative follow-up must remain in its original
+relative wording unless a reliable visit date is supplied.
 
 ==================================================
 BENEFICIARY INFORMATION
@@ -60,6 +66,7 @@ Extract:
 
 - beneficiary_name
 - age
+- age_months (completed months only when explicitly stated for a child under 1 year; prefer this to age=0)
 - beneficiary_location
 
 RULES:
@@ -230,7 +237,10 @@ RULES:
 
 5. Include only danger signs supported by the transcript.
 
-6. If no danger signs are identified, return an empty list.
+6. Return danger_assessment="present" only for signs explicitly reported/present;
+   return "absent" only when the transcript explicitly says the worker assessed
+   danger signs and found none; otherwise return "not_assessed". An empty
+   danger_signs list never means danger signs were assessed and absent.
 
 7. Do not invent danger signs.
 
@@ -405,20 +415,39 @@ RULES:
 
 1. Base the risk assessment only on information supported
    by the transcript.
+2. Use UNKNOWN when danger signs were not assessed and other information is insufficient.
 
-2. risk_reasoning must briefly explain the assessment.
+3. risk_reasoning must briefly explain the assessment.
 
-3. Do not diagnose.
+4. Do not diagnose.
 
-4. When information is incomplete, express uncertainty.
+5. When information is incomplete, express uncertainty.
 
-5. Do not falsely classify a visit as LOW merely because
+6. Do not falsely classify a visit as LOW merely because
    the transcript contains few details.
 
 
 ==================================================
 OUTPUT RULES
 ==================================================
+
+LANGUAGE REQUIREMENT:
+
+The caller supplies the selected speech language. Write all narrative text
+fields (including visit_summary, symptoms, advice_given, danger_signs,
+recommended_action, risk_reasoning, safety_alerts, missing_information,
+uncertain_information, and relative follow-up wording) in that language/style:
+
+- kanglish: natural Kannada-English mix; use Kannada script for Kannada words
+  and retain common English clinical terms when natural.
+- hinglish: natural Hindi-English mix; use Devanagari for Hindi words and
+  retain common English clinical terms when natural.
+- english: write in English.
+
+Do not translate fixed schema values: visit_type and risk_level must remain
+exactly the allowed English enum values. Names, measurements, dates, and vaccine
+names must remain faithful to the transcript. Do not add or infer facts during
+translation.
 
 Return information conforming to the ASHAVisitRecord schema.
 

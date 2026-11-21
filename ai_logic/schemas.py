@@ -16,6 +16,7 @@ class ASHAVisitRecord(BaseModel):
 
     beneficiary_name: Optional[str] = None
     age: Optional[int] = Field(default=None, ge=0, le=120)
+    age_months: Optional[int] = Field(default=None, ge=0, le=1439, description="Age in completed months, when stated for a child under 1 year.")
     beneficiary_location: Optional[str] = None
 
 
@@ -77,6 +78,7 @@ class ASHAVisitRecord(BaseModel):
     # ==========================================
 
     danger_signs: list[str] = Field(default_factory=list)
+    danger_assessment: Literal["present", "absent", "not_assessed"] = "not_assessed"
     advice_given: list[str] = Field(default_factory=list)
 
     recommended_action: Optional[str] = None

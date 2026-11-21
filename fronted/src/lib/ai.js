@@ -2,13 +2,13 @@ const AI_SERVICE_URL = (
   import.meta.env.VITE_AI_API_URL || 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '');
 
-export async function extractVisit(transcript, { signal } = {}) {
+export async function extractVisit(transcript, { signal, language = 'english' } = {}) {
   let response;
   try {
     response = await fetch(`${AI_SERVICE_URL}/extract-visit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transcript }),
+      body: JSON.stringify({ transcript, speech_language: language }),
       signal,
     });
   } catch (error) {
