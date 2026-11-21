@@ -1,5 +1,4 @@
 import os
-
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -21,7 +20,7 @@ def detect_danger_signs(visit_data: dict) -> dict:
     danger_signs = []
 
     symptoms = visit_data.get("symptoms") or []
-    symptoms = [str(s).lower() for s in symptoms]
+    symptoms = [str(s).strip().lower() for s in symptoms]
 
     pregnancy_danger_keywords = [
         "severe headache",
@@ -42,13 +41,19 @@ def detect_danger_signs(visit_data: dict) -> dict:
         "fainting"
     ]
 
-    # Detect danger signs from symptoms
+    # ------------------------------------------
+    # DETECT DANGER SIGNS FROM SYMPTOMS
+    # ------------------------------------------
+
     for symptom in symptoms:
+
         for keyword in pregnancy_danger_keywords:
 
             if keyword in symptom:
+
                 if symptom not in danger_signs:
                     danger_signs.append(symptom)
+
                 break
 
     # ==========================================
@@ -58,34 +63,45 @@ def detect_danger_signs(visit_data: dict) -> dict:
     bp = visit_data.get("blood_pressure")
 
     if bp:
+
         try:
-            systolic, diastolic = map(
-                int,
-                str(bp).replace(" ", "").split("/")
-            )
+
+            bp_values = str(bp).strip().replace(" ", "").split("/")
+
+            if len(bp_values) != 2:
+                raise ValueError("Invalid BP format")
+
+            systolic, diastolic = map(int, bp_values)
+
+            if systolic <= 0 or diastolic <= 0:
+                raise ValueError("Invalid BP values")
 
             if systolic >= 140 or diastolic >= 90:
+
                 danger_signs.append(
                     f"High blood pressure ({bp})"
                 )
 
-        except (ValueError, AttributeError):
+        except (ValueError, TypeError):
+
             print("Could not parse blood pressure:", bp)
 
     # ==========================================
-    # PRESERVE GEMINI RISK CLASSIFICATION
+    # PRESERVE GEMINI ASSESSMENT
     # ==========================================
 
     gemini_risk_level = visit_data.get("risk_level", "UNKNOWN")
+
     gemini_urgent_referral = visit_data.get(
         "urgent_referral", False
     )
 
     visit_data["risk_level"] = gemini_risk_level
+
     visit_data["urgent_referral"] = gemini_urgent_referral
 
     # ==========================================
-    # MERGE GEMINI AND PYTHON DANGER SIGNS
+    # MERGE GEMINI + PYTHON DANGER SIGNS
     # ==========================================
 
     gemini_danger_signs = visit_data.get("danger_signs") or []
@@ -96,18 +112,20 @@ def detect_danger_signs(visit_data: dict) -> dict:
 
         normalized_sign = str(sign).strip().lower()
 
-        # Normalize BP descriptions
-        if (
-            "blood pressure" in normalized_sign
-            or "high blood pressure" in normalized_sign
-        ):
-            bp = visit_data.get("blood_pressure")
+        # Normalize BP danger descriptions
+        if "blood pressure" in normalized_sign:
 
-            if bp:
-                normalized_sign = f"high blood pressure ({bp})"
+            current_bp = visit_data.get("blood_pressure")
 
-        # Avoid duplicates
+            if current_bp:
+
+                normalized_sign = (
+                    f"high blood pressure ({current_bp})"
+                )
+
+        # Prevent duplicate signs
         if normalized_sign not in combined_danger_signs:
+
             combined_danger_signs.append(normalized_sign)
 
     visit_data["danger_signs"] = combined_danger_signs
@@ -116,20 +134,22 @@ def detect_danger_signs(visit_data: dict) -> dict:
     # SAFETY CONSISTENCY CHECK
     # ==========================================
 
-    safety_alerts = []
+    python_safety_alerts = []
 
     if combined_danger_signs:
 
         # Danger signs + LOW risk contradiction
         if visit_data["risk_level"] == "LOW":
-            safety_alerts.append(
+
+            python_safety_alerts.append(
                 "Safety review required: danger signs were detected, "
                 "but the visit was classified as LOW risk."
             )
 
-        # Danger signs + no urgent referral contradiction
+        # Danger signs + no referral contradiction
         if visit_data["urgent_referral"] is False:
-            safety_alerts.append(
+
+            python_safety_alerts.append(
                 "Safety review required: danger signs were detected, "
                 "but urgent referral was marked as false."
             )
@@ -142,29 +162,48 @@ def detect_danger_signs(visit_data: dict) -> dict:
         visit_data.get("visit_type") or ""
     ).lower()
 
-    symptoms = [
+    current_symptoms = [
         str(s).lower()
         for s in (visit_data.get("symptoms") or [])
     ]
 
     if "postpartum" in visit_type or "postnatal" in visit_type:
 
-        if any("bleeding" in symptom for symptom in symptoms):
+        if any("bleeding" in symptom for symptom in current_symptoms):
 
-            safety_alerts.append(
+            python_safety_alerts.append(
                 "Postpartum bleeding reported. Clinical assessment is required."
             )
 
             if not visit_data.get("duration_of_symptoms"):
-                safety_alerts.append(
+
+                python_safety_alerts.append(
                     "Bleeding duration was not established."
                 )
 
-            safety_alerts.append(
+            python_safety_alerts.append(
                 "Bleeding amount/severity is not documented."
             )
 
-    visit_data["safety_alerts"] = safety_alerts
+    # ==========================================
+    # MERGE GEMINI + PYTHON SAFETY ALERTS
+    # ==========================================
+
+    gemini_safety_alerts = (
+        visit_data.get("safety_alerts") or []
+    )
+
+    combined_safety_alerts = []
+
+    for alert in gemini_safety_alerts + python_safety_alerts:
+
+        normalized_alert = str(alert).strip()
+
+        if normalized_alert and normalized_alert not in combined_safety_alerts:
+
+            combined_safety_alerts.append(normalized_alert)
+
+    visit_data["safety_alerts"] = combined_safety_alerts
 
     return visit_data
 
@@ -183,7 +222,7 @@ ASHA VISIT TRANSCRIPT:
 """
 
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+       model="gemini-2.5-flash-lite",
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -192,15 +231,24 @@ ASHA VISIT TRANSCRIPT:
         ),
     )
 
-    # Validate Gemini response
+    # ==========================================
+    # VALIDATE GEMINI RESPONSE
+    # ==========================================
+
     visit_record = ASHAVisitRecord.model_validate_json(
         response.text
     )
 
-    # Convert model to dictionary
+    # ==========================================
+    # CONVERT PYDANTIC MODEL TO DICTIONARY
+    # ==========================================
+
     visit_data = visit_record.model_dump()
 
-    # Run Python safety checks
+    # ==========================================
+    # RUN INDEPENDENT PYTHON SAFETY CHECKS
+    # ==========================================
+
     visit_data = detect_danger_signs(visit_data)
 
     return visit_data
@@ -212,31 +260,48 @@ ASHA VISIT TRANSCRIPT:
 
 def test_danger_detection():
 
-    test_visit = {
-        "beneficiary_name": "Anitha",
-        "age": 24,
-        "visit_type": "Antenatal visit",
-        "symptoms": [
+    test_visit = ASHAVisitRecord(
+        beneficiary_name="Anitha",
+        age=24,
+        visit_type="Antenatal visit",
+        symptoms=[
             "severe headache",
             "blurred vision",
             "swelling of feet"
         ],
-        "duration_of_symptoms": "since yesterday",
-        "temperature": None,
-        "blood_pressure": "150/100",
-        "danger_signs": [],
-        "advice_given": [],
-        "follow_up_date": None,
-        "missing_information": [],
-        "uncertain_information": [],
-        "risk_level": "LOW",
-        "risk_reasoning": "No significant concern identified.",
-        "recommended_action": "Routine follow-up.",
-        "urgent_referral": False,
-        "safety_alerts": []
-    }
+        duration_of_symptoms="since yesterday",
+        temperature=None,
+        blood_pressure="150/100",
 
-    result = detect_danger_signs(test_visit)
+        pregnancy_month=7,
+        pregnancy_status="Pregnant",
+        expected_delivery_date=None,
+
+        newborn_birth_date=None,
+        newborn_weight_kg=None,
+        breastfeeding_status=None,
+
+        immunization_name=[],
+        immunization_status=None,
+
+        danger_signs=[],
+        advice_given=[],
+        follow_up_date=None,
+
+        missing_information=[],
+        uncertain_information=[],
+
+        risk_level="LOW",
+        risk_reasoning="No significant concern identified.",
+        recommended_action="Routine follow-up.",
+        urgent_referral=False,
+
+        safety_alerts=[]
+    )
+
+    result = detect_danger_signs(
+        test_visit.model_dump()
+    )
 
     print("\n========== DANGER DETECTION TEST ==========")
     print("Risk level:", result["risk_level"])
@@ -254,30 +319,47 @@ def test_danger_detection():
 
 def test_safety_consistency():
 
-    test_visit = {
-        "beneficiary_name": "Anitha",
-        "age": 24,
-        "visit_type": "Antenatal visit",
-        "symptoms": [
+    test_visit = ASHAVisitRecord(
+        beneficiary_name="Anitha",
+        age=24,
+        visit_type="Antenatal visit",
+        symptoms=[
             "severe headache",
             "blurred vision"
         ],
-        "duration_of_symptoms": "since yesterday",
-        "temperature": None,
-        "blood_pressure": "150/100",
-        "danger_signs": [],
-        "advice_given": [],
-        "follow_up_date": None,
-        "missing_information": [],
-        "uncertain_information": [],
-        "risk_level": "LOW",
-        "risk_reasoning": "Routine visit",
-        "recommended_action": "Routine follow-up",
-        "urgent_referral": False,
-        "safety_alerts": []
-    }
+        duration_of_symptoms="since yesterday",
+        temperature=None,
+        blood_pressure="150/100",
 
-    result = detect_danger_signs(test_visit)
+        pregnancy_month=7,
+        pregnancy_status="Pregnant",
+        expected_delivery_date=None,
+
+        newborn_birth_date=None,
+        newborn_weight_kg=None,
+        breastfeeding_status=None,
+
+        immunization_name=[],
+        immunization_status=None,
+
+        danger_signs=[],
+        advice_given=[],
+        follow_up_date=None,
+
+        missing_information=[],
+        uncertain_information=[],
+
+        risk_level="LOW",
+        risk_reasoning="Routine visit",
+        recommended_action="Routine follow-up",
+        urgent_referral=False,
+
+        safety_alerts=[]
+    )
+
+    result = detect_danger_signs(
+        test_visit.model_dump()
+    )
 
     print("\n========== SAFETY CONSISTENCY TEST ==========")
     print("Risk level:", result["risk_level"])
@@ -287,3 +369,72 @@ def test_safety_consistency():
     print("==========================================\n")
 
     return result
+
+
+# ==========================================
+# TEST 3: NORMAL HEALTHY VISIT
+# ==========================================
+
+def test_normal_visit():
+
+    test_visit = ASHAVisitRecord(
+        beneficiary_name="Lakshmi",
+        age=23,
+        visit_type="Antenatal visit",
+        symptoms=[],
+        duration_of_symptoms=None,
+        temperature=36.8,
+        blood_pressure="120/80",
+
+        pregnancy_month=4,
+        pregnancy_status="Pregnant",
+        expected_delivery_date=None,
+
+        newborn_birth_date=None,
+        newborn_weight_kg=None,
+        breastfeeding_status=None,
+
+        immunization_name=[],
+        immunization_status=None,
+
+        danger_signs=[],
+        advice_given=[
+            "Maintain a nutritious diet",
+            "Take prescribed supplements"
+        ],
+        follow_up_date=None,
+
+        missing_information=[],
+        uncertain_information=[],
+
+        risk_level="LOW",
+        risk_reasoning="No danger signs reported.",
+        recommended_action="Routine follow-up.",
+        urgent_referral=False,
+
+        safety_alerts=[]
+    )
+
+    result = detect_danger_signs(
+        test_visit.model_dump()
+    )
+
+    print("\n========== NORMAL VISIT TEST ==========")
+    print("Risk level:", result["risk_level"])
+    print("Danger signs:", result["danger_signs"])
+    print("Safety alerts:", result["safety_alerts"])
+    print("Urgent referral:", result["urgent_referral"])
+    print("===================================\n")
+
+    return result
+
+
+# ==========================================
+# RUN LOCAL TESTS
+# ==========================================
+
+if __name__ == "__main__":
+
+    test_danger_detection()
+    test_safety_consistency()
+    test_normal_visit()
