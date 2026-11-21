@@ -43,7 +43,28 @@ Identifies predefined maternal and newborn danger signs and displays appropriate
 - **Backend:** Python
 - **Database:** Supabase
 - **Voice Recognition:** Gnani AI
-
+  
+ASHA Voice / Transcript
+        ↓
+React Frontend
+        ↓
+FastAPI Backend
+        ↓
+Google Gemini API
+        ↓
+Structured Extraction (JSON)
+        ↓
+Pydantic Validation
+        ↓
+Python Safety Engine
+        ↓
+Risk & Danger Sign Checks
+        ↓
+Structured Visit Record
+        ↓
+Supabase (PostgreSQL)
+        ↓
+Frontend Dashboard & Follow-up
 
 ## **6. Expected Outcome**
 ASHA SATHI aims to make healthcare record management easier, faster and more accessible for ASHA workers.
