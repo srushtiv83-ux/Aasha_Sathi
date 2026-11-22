@@ -1,5 +1,5 @@
 const AI_SERVICE_URL = (
-  import.meta.env.VITE_AI_API_URL || 'http://127.0.0.1:8000'
+  import.meta.env.VITE_AI_API_URL || 'https://aasha-sathi.onrender.com'
 ).replace(/\/+$/, '');
 
 export async function extractVisit(transcript, { signal, language = 'english' } = {}) {
