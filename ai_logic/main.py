@@ -22,10 +22,13 @@ frontend_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=frontend_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://aashasathi.netlify.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
